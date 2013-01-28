@@ -2,7 +2,7 @@ import sys
 import collections
 import random
 import re
-from urlparse import urlparse
+from urlparse import urlparse, urlunparse
 from lxml import etree
 from lxml.cssselect import CSSSelector, SelectorSyntaxError, ExpressionError
 import urllib
@@ -45,6 +45,7 @@ class Processor(object):
         self.inlines = []
         self.links = []
         self._bodies = []
+        self.url_queue = []
 
     def _download(self, url):
         try:
@@ -91,6 +92,9 @@ class Processor(object):
 
     def process_url(self, url):
         html = self._download(url)
+        if url not in self.url_queue:
+            self.url_queue.append(url)
+
         self.process_html(html.strip(), url=url)
 
     def process_html(self, html, url):
@@ -121,6 +125,16 @@ class Processor(object):
                 link_url = self._make_absolute_url(url, link.attrib['href'])
                 key = (link_url, link.attrib['href'])
                 self.blocks[key] = self._download(link_url)
+
+        for anchor in CSSSelector('a')(page):
+            link_url = self._pre_process_link(anchor.attrib['href'])
+            if link_url:
+                link_url = self._make_absolute_url(url, link_url)
+                if link_url \
+                    and self._is_same_host_url(url, link_url) \
+                    and link_url not in self.url_queue:
+                        self.url_queue.append(link_url)
+                        self.process_url(link_url)
 
     def _process_content(self, content, bodies):
         # Find all of the unique media queries
@@ -334,6 +348,23 @@ class Processor(object):
         path = '/'.join(parts)
         return parsed.scheme + '://' + parsed.netloc + path
 
+    def _pre_process_link(self, link_url):
+        """
+        should we process this link?
+            1. preprocess link_url and removes fragments and query parameters
+            2. remove javascript and mailto stuff from link_url
+        """
+        if link_url.startswith('mailto:') \
+            or link_url.startswith('javascript:'):
+                return None
+        parsed = urlparse(link_url)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, '', ''))
+
+    def _is_same_host_url(self, url1, url2):
+        """
+        given 2 absolute urls, test whether both have same host
+        """
+        return (urlparse(url1).netloc == urlparse(url2).netloc)
 
 class _Result(object):
     def __init__(self, before, after):
